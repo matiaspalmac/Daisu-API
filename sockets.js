@@ -517,3 +517,5 @@ function setupSocket(io) {
     });
   });
 }
+
+export { setupSocket };
