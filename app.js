@@ -5,10 +5,7 @@ import { createTables } from './db.js';
 import userRoutes from './routes/users.js';
 import chatRoutes from './routes/chats.js';
 
-const routes = [
-  userRoutes,
-  chatRoutes,
-];
+
 
 const app = express();
 
@@ -21,6 +18,7 @@ app.use(logger('dev'));
 createTables();
 
 // Routes
-app.use('/api', ...routes);
+app.use('/api', userRoutes);
+app.use('/api', chatRoutes);
 
 export default app;
