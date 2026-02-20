@@ -37,3 +37,40 @@ setupSocket(io);
 server.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
+
+let shuttingDown = false;
+
+const shutdown = (signal) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[shutdown] Received ${signal}. Closing server gracefully...`);
+
+  const forceExitTimer = setTimeout(() => {
+    console.warn('[shutdown] Force exit after timeout');
+    process.exit(1);
+  }, 10000);
+
+  io.close(() => {
+    server.close((err) => {
+      clearTimeout(forceExitTimer);
+      if (err) {
+        console.error('[shutdown] Error while closing server:', err);
+        process.exit(1);
+      }
+      console.log('[shutdown] Server closed cleanly');
+      process.exit(0);
+    });
+  });
+};
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[runtime] Unhandled rejection:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('[runtime] Uncaught exception:', error);
+  shutdown('uncaughtException');
+});

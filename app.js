@@ -54,5 +54,6 @@ app.use('/api', socialRoutes);
 
 // Health check
 app.get('/health', (_, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));
+app.get('/', (_, res) => res.json({ service: 'daisu-api', status: 'ok', ts: new Date().toISOString() }));
 
 export default app;
