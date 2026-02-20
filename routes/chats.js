@@ -4,6 +4,15 @@ import { db } from '../db.js';
 
 const router = express.Router();
 
+async function supportsMessageRepliesTable() {
+  try {
+    const result = await db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='message_replies' LIMIT 1");
+    return Boolean(result.rows?.length);
+  } catch {
+    return false;
+  }
+}
+
 // GET /api/rooms — with language/level/type filters
 router.get('/rooms', async (req, res) => {
   const { language, level, type } = req.query;
@@ -98,7 +107,7 @@ router.delete('/rooms/:id', async (req, res) => {
 
 // GET /api/chats — messages with filters
 router.get('/chats', async (req, res) => {
-  const limit = Math.min(parseInt(req.query.limit) || 100, 200);
+  const limit = Math.min(parseInt(req.query.limit) || 30, 200);
   const offset = parseInt(req.query.offset) || 0;
   const roomId = req.query.room_id;
   const excludeUserIds = String(req.query.excludeUserIds || '')
@@ -108,10 +117,15 @@ router.get('/chats', async (req, res) => {
     .map(v => Number(v))
     .filter(v => Number.isFinite(v));
   try {
+    const hasReplyMeta = await supportsMessageRepliesTable();
     let sql = `
       SELECT m.id, m.content, m.user_id, u.name as user_name, u.image as user_image,
-             m.room_id, r.name as room_name, m.sent_at
-      FROM messages m JOIN users u ON m.user_id = u.id JOIN rooms r ON m.room_id = r.id WHERE 1=1
+             m.room_id, r.name as room_name, m.sent_at${hasReplyMeta ? ', mr.reply_to_id, mr.reply_to_username, mr.reply_to_content' : ''}
+      FROM messages m
+      JOIN users u ON m.user_id = u.id
+      JOIN rooms r ON m.room_id = r.id
+      ${hasReplyMeta ? 'LEFT JOIN message_replies mr ON mr.message_id = m.id' : ''}
+      WHERE 1=1
     `;
     const args = [];
     if (roomId) { sql += ' AND m.room_id = ?'; args.push(roomId); }
@@ -129,6 +143,13 @@ router.get('/chats', async (req, res) => {
       user: { id: row.user_id, name: row.user_name, image: row.user_image },
       room: { id: row.room_id, name: row.room_name },
       sent_at: row.sent_at,
+      replyTo: hasReplyMeta && row.reply_to_id
+        ? {
+          id: row.reply_to_id,
+          username: row.reply_to_username || row.user_name,
+          content: row.reply_to_content || '',
+        }
+        : undefined,
     })));
   } catch (e) {
     console.error('Error fetching chats:', e);

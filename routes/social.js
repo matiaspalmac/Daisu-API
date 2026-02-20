@@ -119,6 +119,133 @@ router.get('/users/:id/followers', async (req, res) => {
     }
 });
 
+// GET /api/users/:id/following — get users this account follows
+router.get('/users/:id/following', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const result = await db.execute({
+            sql: `
+              SELECT u.id, u.name, u.image, u.level
+              FROM users u
+              WHERE u.id IN (
+                SELECT following_id FROM follows WHERE follower_id = ? AND is_active = 1
+              )
+              LIMIT 100
+            `,
+            args: [id],
+        });
+        res.json(result.rows || []);
+    } catch (e) {
+        console.error('Following error:', e);
+        res.status(500).json({ error: 'Error fetching following users' });
+    }
+});
+
+// GET /api/users/:id/follow-status?viewerId=123 — relationship + counters
+router.get('/users/:id/follow-status', async (req, res) => {
+    const { id } = req.params;
+    const viewerId = req.query.viewerId;
+
+    if (!viewerId) {
+        return res.status(400).json({ error: 'viewerId required' });
+    }
+
+    try {
+        const [isFollowingRes, followsYouRes, followersRes, followingRes] = await Promise.all([
+            db.execute({
+                sql: 'SELECT 1 FROM follows WHERE follower_id = ? AND following_id = ? AND is_active = 1 LIMIT 1',
+                args: [viewerId, id],
+            }),
+            db.execute({
+                sql: 'SELECT 1 FROM follows WHERE follower_id = ? AND following_id = ? AND is_active = 1 LIMIT 1',
+                args: [id, viewerId],
+            }),
+            db.execute({
+                sql: 'SELECT COUNT(*) as total FROM follows WHERE following_id = ? AND is_active = 1',
+                args: [id],
+            }),
+            db.execute({
+                sql: 'SELECT COUNT(*) as total FROM follows WHERE follower_id = ? AND is_active = 1',
+                args: [id],
+            }),
+        ]);
+
+        res.json({
+            isFollowing: isFollowingRes.rows.length > 0,
+            followsYou: followsYouRes.rows.length > 0,
+            followersCount: Number(followersRes.rows?.[0]?.total || 0),
+            followingCount: Number(followingRes.rows?.[0]?.total || 0),
+        });
+    } catch (e) {
+        console.error('Follow status error:', e);
+        res.status(500).json({ error: 'Error fetching follow status' });
+    }
+});
+
+// POST /api/users/:id/follow — viewer follows target user
+router.post('/users/:id/follow', async (req, res) => {
+    const { id } = req.params;
+    const { followerId } = req.body || {};
+
+    if (!followerId) {
+        return res.status(400).json({ error: 'followerId required' });
+    }
+
+    if (String(followerId) === String(id)) {
+        return res.status(400).json({ error: 'Cannot follow yourself' });
+    }
+
+    try {
+        await db.execute({
+            sql: `INSERT INTO follows (follower_id, following_id, is_active, created_at)
+                  VALUES (?, ?, 1, CURRENT_TIMESTAMP)
+                  ON CONFLICT(follower_id, following_id) DO UPDATE SET is_active = 1`,
+            args: [followerId, id],
+        });
+
+        const followersRes = await db.execute({
+            sql: 'SELECT COUNT(*) as total FROM follows WHERE following_id = ? AND is_active = 1',
+            args: [id],
+        });
+
+        res.json({ message: 'Now following', followersCount: Number(followersRes.rows?.[0]?.total || 0) });
+    } catch (e) {
+        console.error('Follow error:', e);
+        res.status(500).json({ error: 'Error following user' });
+    }
+});
+
+// POST /api/users/:id/unfollow — viewer unfollows target user
+router.post('/users/:id/unfollow', async (req, res) => {
+    const { id } = req.params;
+    const { followerId } = req.body || {};
+
+    if (!followerId) {
+        return res.status(400).json({ error: 'followerId required' });
+    }
+
+    if (String(followerId) === String(id)) {
+        return res.status(400).json({ error: 'Cannot unfollow yourself' });
+    }
+
+    try {
+        await db.execute({
+            sql: 'UPDATE follows SET is_active = 0 WHERE follower_id = ? AND following_id = ?',
+            args: [followerId, id],
+        });
+
+        const followersRes = await db.execute({
+            sql: 'SELECT COUNT(*) as total FROM follows WHERE following_id = ? AND is_active = 1',
+            args: [id],
+        });
+
+        res.json({ message: 'Unfollowed', followersCount: Number(followersRes.rows?.[0]?.total || 0) });
+    } catch (e) {
+        console.error('Unfollow error:', e);
+        res.status(500).json({ error: 'Error unfollowing user' });
+    }
+});
+
 // GET /api/users/:id/blocked — get user's blocked users list
 router.get('/users/:id/blocked', async (req, res) => {
     const { id } = req.params;

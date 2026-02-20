@@ -7,6 +7,15 @@ const roomOnlineUsers = new Map();
 // Connected sockets per user: Map<userId, Set<socketId>>
 const connectedUsers = new Map();
 
+async function supportsMessageRepliesTable() {
+  try {
+    const result = await db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='message_replies' LIMIT 1");
+    return Boolean(result.rows?.length);
+  } catch {
+    return false;
+  }
+}
+
 function addConnectedUser(userId, socketId) {
   const key = String(userId);
   if (!connectedUsers.has(key)) connectedUsers.set(key, new Set());
@@ -43,24 +52,23 @@ function setupSocket(io) {
 
     if (userId !== undefined && userId !== null) addConnectedUser(userId, socket.id);
 
-    // Load user meta in background (do not block listener registration)
-    if (userId) {
-      void db.execute({ sql: 'SELECT image, targetLang FROM users WHERE id = ?', args: [userId] })
-        .then(u => {
-          if (u.rows.length > 0) {
-            userImage = u.rows[0].image || '';
-            userTargetLang = u.rows[0].targetLang || '';
-          }
-        })
-        .catch(() => { });
-    }
-
     console.log(`User ${username} connected (id=${userId})`);
 
     // ────────────────────────────────────────────
     // JOIN ROOM
     // ────────────────────────────────────────────
     socket.on('join room', async (roomId) => {
+      // Ensure latest user meta is loaded before publishing online list
+      if (userId !== undefined && userId !== null) {
+        try {
+          const u = await db.execute({ sql: 'SELECT image, targetLang FROM users WHERE id = ?', args: [userId] });
+          if (u.rows.length > 0) {
+            userImage = u.rows[0].image || '';
+            userTargetLang = u.rows[0].targetLang || '';
+          }
+        } catch (_) { }
+      }
+
       // Leave all previous rooms
       const prevRooms = Array.from(socket.rooms).filter(r => r !== socket.id && r.startsWith('room_'));
       for (const r of prevRooms) {
@@ -99,10 +107,13 @@ function setupSocket(io) {
 
       // Send message history
       try {
+        const hasReplyMeta = await supportsMessageRepliesTable();
         const results = await db.execute({
-          sql: `SELECT m.id, m.content, m.user_id, u.name as username, u.image as user_image, m.sent_at, m.detected_lang
-                FROM messages m JOIN users u ON m.user_id = u.id
-                WHERE m.room_id = ? ORDER BY m.sent_at DESC LIMIT 60`,
+          sql: `SELECT m.id, m.content, m.user_id, u.name as username, u.image as user_image, m.sent_at, m.detected_lang${hasReplyMeta ? ', mr.reply_to_id, mr.reply_to_username, mr.reply_to_content' : ''}
+                FROM messages m
+                JOIN users u ON m.user_id = u.id
+                ${hasReplyMeta ? 'LEFT JOIN message_replies mr ON mr.message_id = m.id' : ''}
+                WHERE m.room_id = ? ORDER BY m.sent_at DESC LIMIT 30`,
           args: [roomId],
         });
 
@@ -111,10 +122,13 @@ function setupSocket(io) {
           let reactions = [];
           try {
             const reactionRows = await db.execute({
-              sql: 'SELECT emoji, user_id FROM reactions WHERE message_id = ?',
+              sql: `SELECT r.emoji, r.user_id, u.name as user_name, u.image as user_image
+                    FROM reactions r
+                    LEFT JOIN users u ON u.id = r.user_id
+                    WHERE r.message_id = ?`,
               args: [row.id],
             });
-            reactions = reactionRows.rows.map(r => ({ emoji: r.emoji, userId: r.user_id }));
+            reactions = reactionRows.rows.map(r => ({ emoji: r.emoji, userId: r.user_id, userName: r.user_name || '', userImage: r.user_image || '' }));
           } catch (_) {
             reactions = [];
           }
@@ -129,6 +143,13 @@ function setupSocket(io) {
             reactions,
             senderId: row.user_id?.toString?.() || row.user_id,
             detectedLang: row.detected_lang || '',
+            replyTo: hasReplyMeta && row.reply_to_id
+              ? {
+                id: String(row.reply_to_id),
+                username: row.reply_to_username || row.username,
+                content: row.reply_to_content || '',
+              }
+              : undefined,
           };
         }));
 
@@ -167,8 +188,10 @@ function setupSocket(io) {
     // ────────────────────────────────────────────
     // CHAT MESSAGE
     // ────────────────────────────────────────────
-    socket.on('chat message', async (msg, roomId, clientTempId, ack) => {
+    socket.on('chat message', async (msg, roomId, clientTempId, replyMetaOrAck, maybeAck) => {
       if (!msg?.trim()) return;
+      const replyMeta = (replyMetaOrAck && typeof replyMetaOrAck === 'object') ? replyMetaOrAck : null;
+      const ack = typeof replyMetaOrAck === 'function' ? replyMetaOrAck : maybeAck;
       try {
         const userCheck = await db.execute({ sql: 'SELECT id FROM users WHERE id = ?', args: [userId] });
         if (userCheck.rows.length === 0) return;
@@ -178,6 +201,11 @@ function setupSocket(io) {
         // Detect language of message
         const detectedLang = franc(msg.trim(), { minLength: 5 }) || 'und';
 
+        const hasReplyMeta = await supportsMessageRepliesTable();
+        const replyToId = replyMeta?.id ? String(replyMeta.id).slice(0, 64) : '';
+        const replyToUsername = replyMeta?.username ? String(replyMeta.username).trim().slice(0, 120) : '';
+        const replyToContent = replyMeta?.content ? String(replyMeta.content).trim().slice(0, 500) : '';
+
         const result = await db.execute({
           sql: 'INSERT INTO messages (content, user_id, room_id, detected_lang) VALUES (?, ?, ?, ?)',
           args: [msg.trim(), userId, roomId, detectedLang],
@@ -185,7 +213,26 @@ function setupSocket(io) {
 
         const msgId = result.lastInsertRowid.toString();
 
-        io.to(`room_${roomId}`).emit('chat message', msg.trim(), msgId, username, roomId, new Date().toISOString(), userImage, [], String(userId), detectedLang, clientTempId || '');
+        if (hasReplyMeta && replyToId) {
+          try {
+            await db.execute({
+              sql: `INSERT INTO message_replies (message_id, reply_to_id, reply_to_username, reply_to_content)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(message_id) DO UPDATE SET
+                      reply_to_id = excluded.reply_to_id,
+                      reply_to_username = excluded.reply_to_username,
+                      reply_to_content = excluded.reply_to_content`,
+              args: [msgId, replyToId, replyToUsername, replyToContent],
+            });
+          } catch (replyErr) {
+            console.error('Reply metadata save error:', replyErr);
+          }
+        }
+
+        const replyTo = replyToId
+          ? { id: replyToId, username: replyToUsername || username, content: replyToContent || '' }
+          : undefined;
+        io.to(`room_${roomId}`).emit('chat message', msg.trim(), msgId, username, roomId, new Date().toISOString(), userImage, [], String(userId), detectedLang, replyTo, clientTempId || '');
         if (typeof ack === 'function') ack({ ok: true, id: msgId, clientTempId: clientTempId || '' });
 
         // Update user stats (non-blocking for chat delivery)
@@ -234,9 +281,15 @@ function setupSocket(io) {
         }
         // Broadcast updated reactions for this message
         const allReactions = await db.execute({
-          sql: 'SELECT emoji, user_id FROM reactions WHERE message_id = ?', args: [messageId],
+          sql: `SELECT r.emoji, r.user_id, u.name as user_name, u.image as user_image
+                FROM reactions r
+                LEFT JOIN users u ON u.id = r.user_id
+                WHERE r.message_id = ?`, args: [messageId],
         });
-        io.to(`room_${roomId}`).emit('reaction-update', { messageId, reactions: allReactions.rows.map(r => ({ emoji: r.emoji, userId: r.user_id })) });
+        io.to(`room_${roomId}`).emit('reaction-update', {
+          messageId,
+          reactions: allReactions.rows.map(r => ({ emoji: r.emoji, userId: r.user_id, userName: r.user_name || '', userImage: r.user_image || '' })),
+        });
       } catch (e) { console.error('Reaction error:', e); }
     });
 

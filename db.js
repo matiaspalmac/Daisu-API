@@ -10,15 +10,10 @@ const db = createClient({
 });
 
 const DEFAULT_ROOMS = [
-  { name: 'General', description: 'Sala para todos los idiomas', language: '', level: '', type: 'public', is_default: 1 },
-  { name: 'Español A1-A2', description: 'Nivel básico — aprende los fundamentos del español', language: 'es', level: 'A1-A2', type: 'public', is_default: 1 },
-  { name: 'Español B1-B2', description: 'Nivel intermedio — conversaciones fluidas', language: 'es', level: 'B1-B2', type: 'public', is_default: 1 },
-  { name: 'Español Avanzado', description: 'Nivel C1-C2 — debate y cultura', language: 'es', level: 'C1-C2', type: 'public', is_default: 1 },
-  { name: 'English Beginners', description: 'A1-A2 level — learn English basics', language: 'en', level: 'A1-A2', type: 'public', is_default: 1 },
-  { name: 'English Intermediate', description: 'B1-B2 — improve your conversational English', language: 'en', level: 'B1-B2', type: 'public', is_default: 1 },
-  { name: 'English Advanced', description: 'C1-C2 — debate, culture, idioms', language: 'en', level: 'C1-C2', type: 'public', is_default: 1 },
-  { name: 'Português Básico', description: 'A1-A2 — aprenda português do zero', language: 'pt', level: 'A1-A2', type: 'public', is_default: 1 },
-  { name: 'Português Avançado', description: 'B1-C1 — conversação fluente', language: 'pt', level: 'B1-C1', type: 'public', is_default: 1 },
+  { name: 'General', description: 'Sala abierta para conversar en cualquier idioma, presentarte y practicar libremente.', language: '', level: '', type: 'public', is_default: 1 },
+  { name: 'Español', description: 'Espacio para todos los niveles: practica español con conversación real, dudas y correcciones amigables.', language: 'es', level: '', type: 'public', is_default: 1 },
+  { name: 'English', description: 'Room for all levels: practice everyday English, ask questions, and get supportive corrections.', language: 'en', level: '', type: 'public', is_default: 1 },
+  { name: 'Português', description: 'Sala para todos os níveis: pratique português com conversas reais e correções da comunidade.', language: 'pt', level: '', type: 'public', is_default: 1 },
 ];
 
 const DAILY_PROMPTS = {
@@ -93,12 +88,40 @@ async function createTables() {
         user_id INTEGER NOT NULL,
         room_id INTEGER NOT NULL,
         detected_lang TEXT DEFAULT '',
+        reply_to_id TEXT DEFAULT '',
+        reply_to_username TEXT DEFAULT '',
+        reply_to_content TEXT DEFAULT '',
         sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
         FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE
       )
     `);
     try { await db.execute('ALTER TABLE messages ADD COLUMN detected_lang TEXT DEFAULT ""'); } catch (_) { }
+    try { await db.execute('ALTER TABLE messages ADD COLUMN reply_to_id TEXT DEFAULT ""'); } catch (_) { }
+    try { await db.execute('ALTER TABLE messages ADD COLUMN reply_to_username TEXT DEFAULT ""'); } catch (_) { }
+    try { await db.execute('ALTER TABLE messages ADD COLUMN reply_to_content TEXT DEFAULT ""'); } catch (_) { }
+    try {
+      const messagesInfo = await db.execute('PRAGMA table_info(messages)');
+      const existingMessageCols = new Set((messagesInfo.rows || []).map((row) => String(row.name || '').toLowerCase()));
+      const requiredMessageCols = [
+        { name: 'detected_lang', ddl: "ALTER TABLE messages ADD COLUMN detected_lang TEXT DEFAULT ''" },
+        { name: 'reply_to_id', ddl: "ALTER TABLE messages ADD COLUMN reply_to_id TEXT DEFAULT ''" },
+        { name: 'reply_to_username', ddl: "ALTER TABLE messages ADD COLUMN reply_to_username TEXT DEFAULT ''" },
+        { name: 'reply_to_content', ddl: "ALTER TABLE messages ADD COLUMN reply_to_content TEXT DEFAULT ''" },
+      ];
+
+      for (const col of requiredMessageCols) {
+        if (!existingMessageCols.has(col.name)) {
+          try {
+            await db.execute(col.ddl);
+          } catch (err) {
+            console.error(`Could not add messages.${col.name}:`, err?.message || err);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Could not verify messages schema:', err?.message || err);
+    }
 
     // Reactions
     await db.execute(`
@@ -113,6 +136,22 @@ async function createTables() {
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       )
     `);
+
+    // Message replies metadata (WhatsApp-like reply persistence)
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS message_replies (
+        message_id INTEGER PRIMARY KEY,
+        reply_to_id TEXT DEFAULT '',
+        reply_to_username TEXT DEFAULT '',
+        reply_to_content TEXT DEFAULT '',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+      )
+    `);
+    try { await db.execute('ALTER TABLE message_replies ADD COLUMN reply_to_id TEXT DEFAULT ""'); } catch (_) { }
+    try { await db.execute('ALTER TABLE message_replies ADD COLUMN reply_to_username TEXT DEFAULT ""'); } catch (_) { }
+    try { await db.execute('ALTER TABLE message_replies ADD COLUMN reply_to_content TEXT DEFAULT ""'); } catch (_) { }
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_message_replies_reply_to_id ON message_replies(reply_to_id)'); } catch (_) { }
 
     // Reports
     await db.execute(`

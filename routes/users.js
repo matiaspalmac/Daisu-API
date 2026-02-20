@@ -181,7 +181,7 @@ router.get('/users/:id/chat-settings', async (req, res) => {
                 bubbleTheme: 'neon',
                 myBubbleColor: '#2d88ff',
                 otherBubbleColor: '#1e2430',
-                fontSize: 'medium',
+                fontSize: 'large',
                 effectsEnabled: true,
                 textOnlyMode: false,
                 dataSaverMode: false,
@@ -205,7 +205,7 @@ router.get('/users/:id/chat-settings', async (req, res) => {
             bubbleTheme: row.bubble_theme || 'neon',
             myBubbleColor: row.my_bubble_color || '#2d88ff',
             otherBubbleColor: row.other_bubble_color || '#1e2430',
-            fontSize: row.font_size || 'medium',
+            fontSize: row.font_size || 'large',
             effectsEnabled: Boolean(row.effects_enabled),
             textOnlyMode: Boolean(row.text_only_mode),
             dataSaverMode: Boolean(row.data_saver_mode),
@@ -240,7 +240,7 @@ router.put('/users/:id/chat-settings', async (req, res) => {
     } = req.body || {};
 
     const safeBubbleTheme = ['neon', 'pastel', 'minimal', 'custom'].includes(bubbleTheme) ? bubbleTheme : 'neon';
-    const safeFontSize = ['small', 'medium', 'large'].includes(fontSize) ? fontSize : 'medium';
+    const safeFontSize = ['small', 'medium', 'large'].includes(fontSize) ? fontSize : 'large';
     const safeMyColor = typeof myBubbleColor === 'string' ? myBubbleColor : '#2d88ff';
     const safeOtherColor = typeof otherBubbleColor === 'string' ? otherBubbleColor : '#1e2430';
     const safeRoomBackgrounds = roomBackgrounds && typeof roomBackgrounds === 'object' ? roomBackgrounds : {};
