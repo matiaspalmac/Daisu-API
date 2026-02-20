@@ -37,6 +37,40 @@ router.get('/user/stats/:userId', async (req, res) => {
         const userRes = await db.execute({ sql: 'SELECT created_at, last_active FROM users WHERE id = ?', args: [userId] });
         const user = userRes.rows[0] || {};
 
+        // Favorite Rooms (top 5 by message count)
+        const favoriteRoomsRes = await db.execute({
+            sql: `
+              SELECT r.id, r.name, COUNT(m.id) as message_count
+              FROM messages m
+              JOIN rooms r ON m.room_id = r.id
+              WHERE m.user_id = ?
+              GROUP BY r.id, r.name
+              ORDER BY message_count DESC
+              LIMIT 5
+            `,
+            args: [userId],
+        });
+        const favorite_rooms = favoriteRoomsRes.rows || [];
+
+        // Languages Statistics (message distribution by language)
+        const langsRes = await db.execute({
+            sql: `
+              SELECT r.language, COUNT(m.id) as msg_count
+              FROM messages m
+              JOIN rooms r ON m.room_id = r.id
+              WHERE m.user_id = ? AND r.language IS NOT NULL AND r.language != ''
+              GROUP BY r.language
+              ORDER BY msg_count DESC
+            `,
+            args: [userId],
+        });
+        const totalMsgsByLang = langsRes.rows.reduce((sum, row) => sum + (row.msg_count || 0), 0);
+        const languages_stats = langsRes.rows.map(row => ({
+            language: row.language || 'unknown',
+            message_count: row.msg_count || 0,
+            percentage: totalMsgsByLang > 0 ? (row.msg_count / totalMsgsByLang) * 100 : 0,
+        }));
+
         res.json({
             messages_sent: Number(stats.messages_sent) || 0,
             words_sent: Number(stats.words_sent) || 0,
@@ -47,6 +81,8 @@ router.get('/user/stats/:userId', async (req, res) => {
             messages_this_week: weekCount,
             created_at: user.created_at,
             last_active: user.last_active,
+            favorite_rooms,
+            languages_stats,
         });
     } catch (e) {
         console.error('Stats error:', e);

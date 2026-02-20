@@ -7,27 +7,34 @@ import userRoutes from './routes/users.js';
 import chatRoutes from './routes/chats.js';
 import statsRoutes from './routes/stats.js';
 import socialRoutes from './routes/social.js';
+import analyticsRoutes from './routes/analytics.js';
 
 dotenv.config();
 
 const app = express();
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
+const normalizeOrigin = value => value?.trim().replace(/\/$/, '');
+const rawAllowedOrigins = (process.env.ALLOWED_ORIGINS || '')
 	.split(',')
-	.map(origin => origin.trim())
+	.map(origin => normalizeOrigin(origin))
 	.filter(Boolean);
+const allowAllOrigins = rawAllowedOrigins.includes('*');
+const allowedOrigins = rawAllowedOrigins.filter(origin => origin !== '*');
 
 const corsOptions = {
 	origin(origin, callback) {
 		if (!origin) return callback(null, true);
-		if (allowedOrigins.length === 0 && process.env.NODE_ENV !== 'production') {
+		if (allowAllOrigins) {
 			return callback(null, true);
 		}
-		if (allowedOrigins.includes(origin)) {
+		if (allowedOrigins.length === 0) {
 			return callback(null, true);
 		}
-		return callback(new Error('Not allowed by CORS'));
+		if (allowedOrigins.includes(normalizeOrigin(origin))) {
+			return callback(null, true);
+		}
+		return callback(new Error(`Not allowed by CORS: ${origin}`));
 	},
-	methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+	methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 };
 
 // Middleware
@@ -42,6 +49,7 @@ createTables();
 app.use('/api', userRoutes);
 app.use('/api', chatRoutes);
 app.use('/api', statsRoutes);
+app.use('/api', analyticsRoutes);
 app.use('/api', socialRoutes);
 
 // Health check

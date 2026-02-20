@@ -129,6 +129,24 @@ async function createTables() {
       )
     `);
 
+    // Private chat invites
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS private_chat_invites (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_user_id INTEGER NOT NULL,
+        to_user_id INTEGER NOT NULL,
+        status TEXT DEFAULT 'pending',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        responded_at TIMESTAMP,
+        rejected_at TIMESTAMP,
+        FOREIGN KEY (from_user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (to_user_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+    try { await db.execute('ALTER TABLE private_chat_invites ADD COLUMN responded_at TIMESTAMP'); } catch (_) { }
+    try { await db.execute('ALTER TABLE private_chat_invites ADD COLUMN rejected_at TIMESTAMP'); } catch (_) { }
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_private_invites_pair ON private_chat_invites(from_user_id, to_user_id, created_at)'); } catch (_) { }
+
     // User stats
     await db.execute(`
       CREATE TABLE IF NOT EXISTS user_stats (
@@ -141,6 +159,209 @@ async function createTables() {
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       )
     `);
+
+    // Chat UI settings per user
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS user_chat_settings (
+        user_id INTEGER PRIMARY KEY,
+        bubble_theme TEXT DEFAULT 'neon',
+        my_bubble_color TEXT DEFAULT '#2d88ff',
+        other_bubble_color TEXT DEFAULT '#1e2430',
+        font_size TEXT DEFAULT 'medium',
+        effects_enabled INTEGER DEFAULT 1,
+        text_only_mode INTEGER DEFAULT 0,
+        data_saver_mode INTEGER DEFAULT 0,
+        disable_profile_images INTEGER DEFAULT 0,
+        room_backgrounds TEXT DEFAULT '{}',
+        nicknames TEXT DEFAULT '{}',
+        last_room_id TEXT DEFAULT '',
+        room_drafts TEXT DEFAULT '{}',
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+    try { await db.execute('ALTER TABLE user_chat_settings ADD COLUMN bubble_theme TEXT DEFAULT "neon"'); } catch (_) { }
+    try { await db.execute('ALTER TABLE user_chat_settings ADD COLUMN my_bubble_color TEXT DEFAULT "#2d88ff"'); } catch (_) { }
+    try { await db.execute('ALTER TABLE user_chat_settings ADD COLUMN other_bubble_color TEXT DEFAULT "#1e2430"'); } catch (_) { }
+    try { await db.execute('ALTER TABLE user_chat_settings ADD COLUMN font_size TEXT DEFAULT "medium"'); } catch (_) { }
+    try { await db.execute('ALTER TABLE user_chat_settings ADD COLUMN effects_enabled INTEGER DEFAULT 1'); } catch (_) { }
+    try { await db.execute('ALTER TABLE user_chat_settings ADD COLUMN text_only_mode INTEGER DEFAULT 0'); } catch (_) { }
+    try { await db.execute('ALTER TABLE user_chat_settings ADD COLUMN data_saver_mode INTEGER DEFAULT 0'); } catch (_) { }
+    try { await db.execute('ALTER TABLE user_chat_settings ADD COLUMN disable_profile_images INTEGER DEFAULT 0'); } catch (_) { }
+    try { await db.execute('ALTER TABLE user_chat_settings ADD COLUMN room_backgrounds TEXT DEFAULT "{}"'); } catch (_) { }
+    try { await db.execute('ALTER TABLE user_chat_settings ADD COLUMN nicknames TEXT DEFAULT "{}"'); } catch (_) { }
+    try { await db.execute('ALTER TABLE user_chat_settings ADD COLUMN last_room_id TEXT DEFAULT ""'); } catch (_) { }
+    try { await db.execute('ALTER TABLE user_chat_settings ADD COLUMN room_drafts TEXT DEFAULT "{}"'); } catch (_) { }
+    try { await db.execute('ALTER TABLE user_chat_settings ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP'); } catch (_) { }
+
+    // Personal moderation (mute/block) between users
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS user_moderation (
+        user_id INTEGER NOT NULL,
+        target_user_id INTEGER NOT NULL,
+        muted INTEGER DEFAULT 0,
+        blocked INTEGER DEFAULT 0,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (user_id, target_user_id),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (target_user_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+    try { await db.execute('ALTER TABLE user_moderation ADD COLUMN muted INTEGER DEFAULT 0'); } catch (_) { }
+    try { await db.execute('ALTER TABLE user_moderation ADD COLUMN blocked INTEGER DEFAULT 0'); } catch (_) { }
+    try { await db.execute('ALTER TABLE user_moderation ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP'); } catch (_) { }
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_user_moderation_user ON user_moderation(user_id)'); } catch (_) { }
+
+    // User-Room Roles (user/mod/owner)
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS user_room_roles (
+        user_id INTEGER NOT NULL,
+        room_id INTEGER NOT NULL,
+        role TEXT DEFAULT 'user',
+        assigned_by INTEGER,
+        assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (user_id, room_id),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE,
+        FOREIGN KEY (assigned_by) REFERENCES users(id) ON DELETE SET NULL
+      )
+    `);
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_user_room_roles_room ON user_room_roles(room_id)'); } catch (_) { }
+
+    // Pinned Messages
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS pinned_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        message_id INTEGER NOT NULL,
+        room_id INTEGER NOT NULL,
+        pinned_by INTEGER NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(message_id, room_id),
+        FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+        FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE,
+        FOREIGN KEY (pinned_by) REFERENCES users(id) ON DELETE SET NULL
+      )
+    `);
+
+    // Mentions in Messages
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS mentions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        message_id INTEGER NOT NULL,
+        mentioned_user_id INTEGER NOT NULL,
+        is_read INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+        FOREIGN KEY (mentioned_user_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_mentions_user ON mentions(mentioned_user_id, is_read)'); } catch (_) { }
+
+    // Room Bans with expiration
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS room_bans (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        room_id INTEGER NOT NULL,
+        banned_by INTEGER NOT NULL,
+        reason TEXT DEFAULT '',
+        expires_at TIMESTAMP,
+        is_permanent INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, room_id),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE,
+        FOREIGN KEY (banned_by) REFERENCES users(id) ON DELETE SET NULL
+      )
+    `);
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_room_bans_expiry ON room_bans(expires_at)'); } catch (_) { }
+
+    // User Favorite Emojis
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS user_emoji_favorites (
+        user_id INTEGER NOT NULL,
+        emoji TEXT NOT NULL,
+        count INTEGER DEFAULT 1,
+        last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (user_id, emoji),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+
+    // Moderator Actions Audit Log
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS moderator_actions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        mod_id INTEGER NOT NULL,
+        action TEXT NOT NULL,
+        target_user_id INTEGER,
+        room_id INTEGER,
+        details TEXT DEFAULT '{}',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (mod_id) REFERENCES users(id) ON DELETE SET NULL,
+        FOREIGN KEY (target_user_id) REFERENCES users(id) ON DELETE SET NULL,
+        FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE SET NULL
+      )
+    `);
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_mod_actions_mod ON moderator_actions(mod_id)'); } catch (_) { }
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_mod_actions_target ON moderator_actions(target_user_id)'); } catch (_) { }
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_mod_actions_room ON moderator_actions(room_id)'); } catch (_) { }
+
+    // Social Features: Followers
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS follows (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        follower_id INTEGER NOT NULL,
+        following_id INTEGER NOT NULL,
+        is_active INTEGER DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (follower_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (following_id) REFERENCES users(id) ON DELETE CASCADE,
+        UNIQUE(follower_id, following_id)
+      )
+    `);
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_follows_follower ON follows(follower_id)'); } catch (_) { }
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_follows_following ON follows(following_id)'); } catch (_) { }
+
+    // Social Features: User Blocks
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS user_blocks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        blocked_user_id INTEGER NOT NULL,
+        is_active INTEGER DEFAULT 1,
+        blocked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (blocked_user_id) REFERENCES users(id) ON DELETE CASCADE,
+        UNIQUE(user_id, blocked_user_id)
+      )
+    `);
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_blocks_user ON user_blocks(user_id)'); } catch (_) { }
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_blocks_blocked ON user_blocks(blocked_user_id)'); } catch (_) { }
+
+    // Social Features: Profile Views
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS profile_views (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        profile_owner_id INTEGER NOT NULL,
+        viewer_id INTEGER NOT NULL,
+        viewed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (profile_owner_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (viewer_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_profile_views_owner ON profile_views(profile_owner_id)'); } catch (_) { }
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_profile_views_viewer ON profile_views(viewer_id)'); } catch (_) { }
+
+    // Add privacy and customization columns to users table
+    const privacyColumns = [
+      'is_public INTEGER DEFAULT 1',
+      'hide_old_messages INTEGER DEFAULT 0',
+      'bubble_color TEXT DEFAULT "#2d88ff"'
+    ];
+    for (const col of privacyColumns) {
+      try { await db.execute(`ALTER TABLE users ADD COLUMN ${col}`); } catch (_) { /* already exists */ }
+    }
 
     // Seed default rooms
     for (const room of DEFAULT_ROOMS) {

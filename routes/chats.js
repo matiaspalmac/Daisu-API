@@ -101,6 +101,12 @@ router.get('/chats', async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit) || 100, 200);
   const offset = parseInt(req.query.offset) || 0;
   const roomId = req.query.room_id;
+  const excludeUserIds = String(req.query.excludeUserIds || '')
+    .split(',')
+    .map(v => v.trim())
+    .filter(Boolean)
+    .map(v => Number(v))
+    .filter(v => Number.isFinite(v));
   try {
     let sql = `
       SELECT m.id, m.content, m.user_id, u.name as user_name, u.image as user_image,
@@ -109,6 +115,11 @@ router.get('/chats', async (req, res) => {
     `;
     const args = [];
     if (roomId) { sql += ' AND m.room_id = ?'; args.push(roomId); }
+    if (excludeUserIds.length > 0) {
+      const placeholders = excludeUserIds.map(() => '?').join(',');
+      sql += ` AND m.user_id NOT IN (${placeholders})`;
+      args.push(...excludeUserIds);
+    }
     sql += ' ORDER BY m.sent_at DESC LIMIT ? OFFSET ?';
     args.push(limit, offset);
 
@@ -140,6 +151,109 @@ router.get('/stats', async (_, res) => {
     });
   } catch (e) {
     res.status(500).json({ error: 'Error fetching stats' });
+  }
+});
+
+// GET /api/rooms/:roomId/pinned — get pinned messages in room
+router.get('/rooms/:roomId/pinned', async (req, res) => {
+  const { roomId } = req.params;
+  try {
+    const result = await db.execute({
+      sql: `SELECT pm.id, m.id as message_id, m.content, m.user_id, u.name as user_name, u.image as user_image,
+                   pm.pinned_by, ub.name as pinned_by_name, pm.created_at
+            FROM pinned_messages pm
+            JOIN messages m ON pm.message_id = m.id
+            JOIN users u ON m.user_id = u.id
+            LEFT JOIN users ub ON pm.pinned_by = ub.id
+            WHERE pm.room_id = ?
+            ORDER BY pm.created_at DESC LIMIT 3`,
+      args: [roomId],
+    });
+    res.json(result.rows);
+  } catch (e) {
+    console.error('Error fetching pinned messages:', e);
+    res.status(500).json({ error: 'Error fetching pinned messages' });
+  }
+});
+
+// POST /api/messages/:messageId/pin (pin message to room)
+router.post('/messages/:messageId/pin', async (req, res) => {
+  const { messageId } = req.params;
+  const { roomId, userId } = req.body || {};
+  if (!roomId || !userId) return res.status(400).json({ error: 'roomId and userId required' });
+  try {
+    // Check if user is mod/owner
+    const userRole = await db.execute({
+      sql: 'SELECT role FROM user_room_roles WHERE user_id = ? AND room_id = ?',
+      args: [userId, roomId],
+    });
+    const isAdmin = userRole.rows.length && (userRole.rows[0].role === 'owner' || userRole.rows[0].role === 'mod');
+    if (!isAdmin) {
+      return res.status(403).json({ error: 'Only mods/owners can pin messages' });
+    }
+    // Check message exists in room
+    const msg = await db.execute({
+      sql: 'SELECT id FROM messages WHERE id = ? AND room_id = ?',
+      args: [messageId, roomId],
+    });
+    if (!msg.rows.length) return res.status(404).json({ error: 'Message not found in this room' });
+    
+    await db.execute({
+      sql: `INSERT INTO pinned_messages (message_id, room_id, pinned_by)
+            VALUES (?, ?, ?)
+            ON CONFLICT(message_id, room_id) DO UPDATE SET pinned_by = excluded.pinned_by`,
+      args: [messageId, roomId, userId],
+    });
+    res.json({ message: 'Message pinned', messageId, roomId });
+  } catch (e) {
+    console.error('Error pinning message:', e);
+    res.status(500).json({ error: 'Error pinning message' });
+  }
+});
+
+// DELETE /api/messages/:messageId/pin/:roomId (unpin)
+router.delete('/messages/:messageId/pin/:roomId', async (req, res) => {
+  const { messageId, roomId } = req.params;
+  const { userId } = req.body || {};
+  if (!userId) return res.status(400).json({ error: 'userId required' });
+  try {
+    // Check admin
+    const userRole = await db.execute({
+      sql: 'SELECT role FROM user_room_roles WHERE user_id = ? AND room_id = ?',
+      args: [userId, roomId],
+    });
+    const isAdmin = userRole.rows.length && (userRole.rows[0].role === 'owner' || userRole.rows[0].role === 'mod');
+    if (!isAdmin) {
+      return res.status(403).json({ error: 'Only mods/owners can unpin messages' });
+    }
+    await db.execute({
+      sql: 'DELETE FROM pinned_messages WHERE message_id = ? AND room_id = ?',
+      args: [messageId, roomId],
+    });
+    res.json({ message: 'Message unpinned' });
+  } catch (e) {
+    console.error('Error unpinning message:', e);
+    res.status(500).json({ error: 'Error unpinning message' });
+  }
+});
+
+// POST /api/messages/:messageId/mention (create mention)
+router.post('/messages/:messageId/mention', async (req, res) => {
+  const { messageId } = req.params;
+  const { userId } = req.body || {};
+  if (!userId) return res.status(400).json({ error: 'userId required' });
+  try {
+    await db.execute({
+      sql: 'INSERT INTO mentions (message_id, mentioned_user_id) VALUES (?, ?)',
+      args: [messageId, userId],
+    });
+    res.json({ message: 'Mention created', messageId, userId });
+  } catch (e) {
+    if (!e.message.includes('UNIQUE')) {
+      console.error('Error creating mention:', e);
+      return res.status(500).json({ error: 'Error creating mention' });
+    }
+    res.json({ message: 'Mention already exists' });
   }
 });
 

@@ -97,4 +97,119 @@ router.get('/match', async (req, res) => {
     }
 });
 
+// GET /api/users/:id/followers — get user's followers
+router.get('/users/:id/followers', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const result = await db.execute({
+            sql: `
+              SELECT u.id, u.name, u.image, u.level
+              FROM users u
+              WHERE u.id IN (
+                SELECT follower_id FROM follows WHERE following_id = ? AND is_active = 1
+              )
+              LIMIT 100
+            `,
+            args: [id],
+        });
+        res.json(result.rows || []);
+    } catch (e) {
+        console.error('Followers error:', e);
+        res.status(500).json({ error: 'Error fetching followers' });
+    }
+});
+
+// GET /api/users/:id/blocked — get user's blocked users list
+router.get('/users/:id/blocked', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const result = await db.execute({
+            sql: `
+              SELECT u.id, u.name, u.image, u.email
+              FROM users u
+              WHERE u.id IN (
+                SELECT blocked_user_id FROM user_blocks WHERE user_id = ? AND is_active = 1
+              )
+              LIMIT 100
+            `,
+            args: [id],
+        });
+        res.json(result.rows || []);
+    } catch (e) {
+        console.error('Blocked users error:', e);
+        res.status(500).json({ error: 'Error fetching blocked users' });
+    }
+});
+
+// POST /api/users/:id/unblock — unblock a user
+router.post('/users/:id/unblock', async (req, res) => {
+    const { id } = req.params;
+    const { blockedUserId } = req.body;
+    if (!blockedUserId) return res.status(400).json({ error: 'blockedUserId required' });
+    try {
+        await db.execute({
+            sql: 'UPDATE user_blocks SET is_active = 0 WHERE user_id = ? AND blocked_user_id = ?',
+            args: [id, blockedUserId],
+        });
+        res.json({ message: 'User unblocked' });
+    } catch (e) {
+        console.error('Unblock error:', e);
+        res.status(500).json({ error: 'Error unblocking user' });
+    }
+});
+
+// GET /api/users/:id/profile-views — get profile view history
+router.get('/users/:id/profile-views', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const result = await db.execute({
+            sql: `
+              SELECT pv.id, u.id, u.name, u.image, pv.viewed_at
+              FROM profile_views pv
+              JOIN users u ON pv.viewer_id = u.id
+              WHERE pv.profile_owner_id = ? AND pv.viewed_at >= datetime('now', '-90 days')
+              ORDER BY pv.viewed_at DESC
+              LIMIT 50
+            `,
+            args: [id],
+        });
+        res.json(result.rows || []);
+    } catch (e) {
+        console.error('Profile views error:', e);
+        res.status(500).json({ error: 'Error fetching profile views' });
+    }
+});
+
+// PATCH /api/users/:id/privacy — update privacy settings
+router.patch('/users/:id/privacy', async (req, res) => {
+    const { id } = req.params;
+    const { is_public, hide_old_messages } = req.body;
+    try {
+        const updates = [];
+        const args = [];
+        
+        if (is_public !== undefined) {
+            updates.push('is_public = ?');
+            args.push(is_public ? 1 : 0);
+        }
+        if (hide_old_messages !== undefined) {
+            updates.push('hide_old_messages = ?');
+            args.push(hide_old_messages ? 1 : 0);
+        }
+        
+        if (updates.length === 0) {
+            return res.status(400).json({ error: 'No fields to update' });
+        }
+        
+        args.push(id);
+        const sql = `UPDATE users SET ${updates.join(', ')} WHERE id = ?`;
+        
+        await db.execute({ sql, args });
+        res.json({ message: 'Privacy settings updated' });
+    } catch (e) {
+        console.error('Privacy update error:', e);
+        res.status(500).json({ error: 'Error updating privacy settings' });
+    }
+});
+
 export default router;
