@@ -1,7 +1,8 @@
 // routes/analytics.js - Analytics & Dashboard Data
+import express from 'express';
 import { db } from '../db.js';
 
-const router = require('express').Router();
+const router = express.Router();
 
 // GET /api/analytics/top-users — top 10 most active users
 router.get('/analytics/top-users', async (req, res) => {
@@ -115,7 +116,8 @@ router.get('/analytics/flood-detection', async (req, res) => {
 router.get('/analytics/audit-log', async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit || '100'), 500);
-    const result = await db.execute(`
+    const result = await db.execute({
+      sql: `
       SELECT ma.id, ma.mod_id, u_mod.name as mod_name, ma.action,
              ma.target_user_id, u_target.name as target_name,
              ma.room_id, r.name as room_name,
@@ -126,7 +128,9 @@ router.get('/analytics/audit-log', async (req, res) => {
       LEFT JOIN rooms r ON ma.room_id = r.id
       ORDER BY ma.created_at DESC
       LIMIT ?
-    `, [limit]);
+    `,
+      args: [limit],
+    });
     res.json(result.rows);
   } catch (e) {
     console.error('Error fetching audit log:', e);
@@ -137,13 +141,13 @@ router.get('/analytics/audit-log', async (req, res) => {
 // GET /api/analytics/banned-words
 router.get('/analytics/banned-words', async (req, res) => {
   try {
-    // For now, return a default list (could be stored in DB)
-    const bannedWords = [
-      'spam', 'abuse', 'hate', 'harassment',
-      // ... more words
-    ];
-    res.json({ words: bannedWords });
+    const result = await db.execute({
+      sql: 'SELECT word FROM banned_words ORDER BY word ASC',
+      args: [],
+    });
+    res.json({ words: result.rows.map(r => r.word) });
   } catch (e) {
+    console.error('Error fetching banned words:', e);
     res.status(500).json({ error: 'Error fetching banned words' });
   }
 });
@@ -159,11 +163,27 @@ router.post('/analytics/banned-words', async (req, res) => {
     if (!user.rows.length || !user.rows[0].isAdmin) {
       return res.status(403).json({ error: 'Only admins can add banned words' });
     }
-    // In a real app, persist to DB
-    res.json({ message: 'Word added to blacklist', word });
+
+    const normalizedWord = String(word).trim().toLowerCase();
+    if (!normalizedWord) {
+      return res.status(400).json({ error: 'word is required' });
+    }
+
+    await db.execute({
+      sql: 'INSERT OR IGNORE INTO banned_words (word, created_by) VALUES (?, ?)',
+      args: [normalizedWord, requestingUserId],
+    });
+
+    await db.execute({
+      sql: 'INSERT INTO moderator_actions (mod_id, action, details) VALUES (?, ?, ?)',
+      args: [requestingUserId, 'add_banned_word', JSON.stringify({ word: normalizedWord })],
+    });
+
+    res.json({ message: 'Word added to blacklist', word: normalizedWord });
   } catch (e) {
+    console.error('Error adding banned word:', e);
     res.status(500).json({ error: 'Error adding word' });
   }
 });
 
-module.exports = router;
+export default router;

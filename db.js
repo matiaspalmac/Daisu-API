@@ -256,6 +256,19 @@ async function createTables() {
       )
     `);
     try { await db.execute('CREATE INDEX IF NOT EXISTS idx_mentions_user ON mentions(mentioned_user_id, is_read)'); } catch (_) { }
+    try { await db.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_mentions_unique_pair ON mentions(message_id, mentioned_user_id)'); } catch (_) { }
+
+    // Banned words for moderation
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS banned_words (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        word TEXT NOT NULL UNIQUE,
+        created_by INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+      )
+    `);
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_banned_words_word ON banned_words(word)'); } catch (_) { }
 
     // Room Bans with expiration
     await db.execute(`
@@ -377,6 +390,14 @@ async function createTables() {
       await db.execute({
         sql: `UPDATE rooms SET daily_prompt = ?, prompt_updated_at = CURRENT_TIMESTAMP WHERE language = ? AND daily_prompt = ''`,
         args: [prompt, lang],
+      });
+    }
+
+    // Seed baseline banned words
+    for (const word of ['spam', 'abuse', 'hate', 'harassment']) {
+      await db.execute({
+        sql: 'INSERT OR IGNORE INTO banned_words (word) VALUES (?)',
+        args: [word],
       });
     }
 
