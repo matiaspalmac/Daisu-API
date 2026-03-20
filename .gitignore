@@ -1,2 +1,44 @@
+# Dependencies
+node_modules/
+
+# Environment variables
 .env
-node_modules
+.env.*
+!.env.example
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+*.sql
+*.sqlite
+*.sqlite3
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build / Temp
+dist/
+build/
+tmp/
+.tmp/
+coverage/
+
+# Notes / Plans
+PLAN.md
+TODO.md
+NOTES.md
