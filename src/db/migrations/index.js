@@ -1,0 +1,47 @@
+import { up as m001 } from './001-users.js';
+import { up as m002 } from './002-rooms.js';
+import { up as m003 } from './003-messages.js';
+import { up as m004 } from './004-private-invites.js';
+import { up as m005 } from './005-user-data.js';
+import { up as m006 } from './006-moderation.js';
+import { up as m007 } from './007-social.js';
+import { up as m008 } from './008-languages.js';
+import { up as m009 } from './009-corrections.js';
+import { up as m010 } from './010-notifications.js';
+import { up as m011 } from './011-achievements.js';
+import { up as m012 } from './012-vocabulary.js';
+import { up as m013 } from './013-tandem.js';
+import { up as m014 } from './014-dms.js';
+import { up as m015 } from './015-events.js';
+import { up as m016 } from './016-memberships.js';
+import { up as m017 } from './017-resources.js';
+import { up as m018 } from './018-news.js';
+import { up as m019 } from './019-password-resets.js';
+import { up as m020 } from './020-room-invites.js';
+import { up as m021 } from './021-presence.js';
+import { up as m022 } from './022-quizzes.js';
+
+export async function runMigrations(db, tryExec) {
+  await m001(db, tryExec);
+  await m002(db, tryExec);
+  await m003(db, tryExec);
+  await m004(db, tryExec);
+  await m005(db, tryExec);
+  await m006(db, tryExec);
+  await m007(db, tryExec);
+  await m008(db, tryExec);
+  await m009(db, tryExec);
+  await m010(db, tryExec);
+  await m011(db, tryExec);
+  await m012(db, tryExec);
+  await m013(db, tryExec);
+  await m014(db, tryExec);
+  await m015(db, tryExec);
+  await m016(db, tryExec);
+  await m017(db, tryExec);
+  await m018(db, tryExec);
+  await m019(db, tryExec);
+  await m020(db, tryExec);
+  await m021(db, tryExec);
+  await m022(db, tryExec);
+}
