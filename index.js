@@ -1,62 +1,52 @@
-import dotenv from 'dotenv';
 import { createServer } from 'node:http';
 import { Server } from 'socket.io';
+import { config } from './src/config/index.js';
+import { corsOptions } from './src/config/cors.js';
 import app from './app.js';
-import { setupSocket } from './sockets.js';
-
-dotenv.config();
-
-const port = process.env.PORT ?? 3001;
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
-  .split(',')
-  .map(origin => origin.trim())
-  .filter(Boolean);
+import { setupSocket } from './src/sockets/index.js';
+import { socketAuthMiddleware } from './src/sockets/middleware.js';
+import { runCleanup } from './src/services/cleanup.js';
 
 const server = createServer(app);
 
 const io = new Server(server, {
   path: '/api/socket',
   cors: {
-    origin(origin, callback) {
-      if (!origin) return callback(null, true);
-      if (allowedOrigins.length === 0 && process.env.NODE_ENV !== 'production') {
-        return callback(null, true);
-      }
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-      return callback(new Error('Not allowed by CORS'));
-    },
+    origin: corsOptions.origin,
     methods: ['GET', 'POST'],
   },
   connectionStateRecovery: {},
 });
 
+// Socket authentication
+io.use(socketAuthMiddleware);
+
+// Socket event handlers
 setupSocket(io);
 
-server.listen(port, () => {
-  console.log(`Server running on port ${port}`);
+server.listen(config.port, () => {
+  console.log(`Server running on port ${config.port}`);
 });
 
-let shuttingDown = false;
+// Cleanup scheduler
+const cleanupInterval = setInterval(() => runCleanup().catch(console.error), config.cleanupIntervalMs);
+runCleanup().catch(console.error);
 
+// Graceful shutdown
+let shuttingDown = false;
 const shutdown = (signal) => {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`[shutdown] Received ${signal}. Closing server gracefully...`);
-
+  clearInterval(cleanupInterval);
   const forceExitTimer = setTimeout(() => {
     console.warn('[shutdown] Force exit after timeout');
     process.exit(1);
-  }, 10000);
-
+  }, config.shutdownTimeoutMs);
   io.close(() => {
     server.close((err) => {
       clearTimeout(forceExitTimer);
-      if (err) {
-        console.error('[shutdown] Error while closing server:', err);
-        process.exit(1);
-      }
+      if (err) { console.error('[shutdown] Error:', err); process.exit(1); }
       console.log('[shutdown] Server closed cleanly');
       process.exit(0);
     });
@@ -65,12 +55,5 @@ const shutdown = (signal) => {
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
-
-process.on('unhandledRejection', (reason) => {
-  console.error('[runtime] Unhandled rejection:', reason);
-});
-
-process.on('uncaughtException', (error) => {
-  console.error('[runtime] Uncaught exception:', error);
-  shutdown('uncaughtException');
-});
+process.on('unhandledRejection', (reason) => console.error('[runtime] Unhandled rejection:', reason));
+process.on('uncaughtException', (error) => { console.error('[runtime] Uncaught exception:', error); shutdown('uncaughtException'); });
