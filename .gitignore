@@ -1,16 +1,18 @@
-# Dependencies
+# Dependencias
 node_modules/
 
-# Environment variables
+# Variables de entorno
 .env
-.env.*
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
 !.env.example
 
-# Database
+# Base de datos local
 *.db
 *.db-shm
 *.db-wal
-*.sql
 *.sqlite
 *.sqlite3
 
@@ -19,26 +21,31 @@ logs/
 *.log
 npm-debug.log*
 
-# OS files
+# Archivos del sistema operativo
 .DS_Store
 Thumbs.db
-Desktop.ini
+desktop.ini
 
-# IDE / Editor
+# IDE / Editores
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+.project
+.settings/
 
-# Build / Temp
+# Build / Temporales
 dist/
 build/
 tmp/
 .tmp/
 coverage/
 
-# Notes / Plans
+# Certificados
+*.pem
+
+# Notas / Planes
 PLAN.md
 TODO.md
 NOTES.md

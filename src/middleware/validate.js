@@ -1,3 +1,5 @@
+import { ValidationError } from '../errors/index.js';
+
 /**
  * Express middleware factory that validates req.body against a Zod schema.
  * Usage: router.post('/path', validate(mySchema), handler)
@@ -6,10 +8,10 @@ export function validate(schema) {
   return (req, res, next) => {
     const result = schema.safeParse(req.body);
     if (!result.success) {
-      return res.status(400).json({
-        error: 'Validation error',
-        details: result.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })),
-      });
+      throw new ValidationError(
+        'Validation error',
+        result.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })),
+      );
     }
     req.validated = result.data;
     next();
@@ -23,10 +25,10 @@ export function validateQuery(schema) {
   return (req, res, next) => {
     const result = schema.safeParse(req.query);
     if (!result.success) {
-      return res.status(400).json({
-        error: 'Validation error',
-        details: result.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })),
-      });
+      throw new ValidationError(
+        'Validation error',
+        result.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })),
+      );
     }
     req.validatedQuery = result.data;
     next();

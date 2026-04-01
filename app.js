@@ -9,7 +9,8 @@ import { config } from './src/config/index.js';
 import { corsOptions } from './src/config/cors.js';
 import { db, createTables } from './src/db/index.js';
 import { mountRoutes } from './src/routes.js';
-import { authLimiter, apiLimiter } from './middleware/rate-limit.js';
+import { authLimiter, apiLimiter } from './src/middleware/rate-limit.js';
+import { errorHandler } from './src/middleware/error-handler.js';
 
 const app = express();
 
@@ -48,7 +49,7 @@ app.get('/health', async (_, res) => {
   try {
     await db.execute('SELECT 1');
     res.json({ status: 'ok', db: 'connected', ts: new Date().toISOString() });
-  } catch (e) {
+  } catch {
     res.status(503).json({ status: 'error', db: 'disconnected', ts: new Date().toISOString() });
   }
 });
@@ -57,14 +58,10 @@ app.get('/', (_, res) => res.json({ service: 'daisu-api', status: 'ok', ts: new 
 
 // 404 handler
 app.use((req, res) => {
-  res.status(404).json({ error: 'Endpoint not found', path: req.originalUrl });
+  res.status(404).json({ error: 'Endpoint not found', code: 'NOT_FOUND', path: req.originalUrl });
 });
 
-// Global error handler
-app.use((err, req, res, next) => {
-  if (err.message?.includes('CORS')) return res.status(403).json({ error: 'Not allowed by CORS' });
-  console.error('[error]', err.stack || err.message || err);
-  res.status(err.status || 500).json({ error: err.message || 'Internal server error' });
-});
+// Centralized error handler (MUST be last)
+app.use(errorHandler);
 
 export default app;

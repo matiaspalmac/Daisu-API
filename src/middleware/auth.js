@@ -1,38 +1,41 @@
-// middleware/auth.js — JWT authentication & authorization
+// src/middleware/auth.js — JWT authentication & authorization
 import jwt from 'jsonwebtoken';
-import { db } from '../src/config/database.js';
-
-const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
+import { config } from '../config/index.js';
+import { AuthenticationError, AuthorizationError } from '../errors/index.js';
 
 /**
  * Generate a JWT token for a user.
  */
-function generateToken(user) {
+export function generateToken(user) {
   return jwt.sign(
     { id: user.id, email: user.email, isAdmin: Boolean(user.isAdmin), membership_tier: user.membership_tier || 'free' },
-    JWT_SECRET,
-    { expiresIn: JWT_EXPIRES_IN },
+    config.jwt.secret,
+    { expiresIn: config.jwt.expiresIn },
   );
 }
 
 /**
  * Middleware: requires a valid JWT in Authorization header.
- * Sets req.user = { id, email, isAdmin }.
+ * Sets req.user = { id, email, isAdmin, membership_tier }.
  */
-function auth(req, res, next) {
+export function auth(req, res, next) {
   const header = req.headers.authorization;
   if (!header || !header.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Authentication required' });
+    throw new AuthenticationError('Authentication required');
   }
 
   try {
     const token = header.slice(7);
-    const decoded = jwt.verify(token, JWT_SECRET);
-    req.user = { id: String(decoded.id), email: decoded.email, isAdmin: Boolean(decoded.isAdmin), membership_tier: decoded.membership_tier || 'free' };
+    const decoded = jwt.verify(token, config.jwt.secret);
+    req.user = {
+      id: String(decoded.id),
+      email: decoded.email,
+      isAdmin: Boolean(decoded.isAdmin),
+      membership_tier: decoded.membership_tier || 'free',
+    };
     next();
-  } catch (err) {
-    return res.status(401).json({ error: 'Invalid or expired token' });
+  } catch {
+    throw new AuthenticationError('Invalid or expired token');
   }
 }
 
@@ -40,9 +43,9 @@ function auth(req, res, next) {
  * Middleware: requires the authenticated user to be admin.
  * Must be used after auth().
  */
-function adminOnly(req, res, next) {
+export function adminOnly(req, res, next) {
   if (!req.user?.isAdmin) {
-    return res.status(403).json({ error: 'Admin access required' });
+    throw new AuthorizationError('Admin access required');
   }
   next();
 }
@@ -51,9 +54,9 @@ function adminOnly(req, res, next) {
  * Middleware: requires the authenticated user to be the owner of the resource
  * (req.params.id matches req.user.id) OR an admin.
  */
-function ownerOrAdmin(req, res, next) {
+export function ownerOrAdmin(req, res, next) {
   if (String(req.user?.id) !== String(req.params.id) && !req.user?.isAdmin) {
-    return res.status(403).json({ error: 'Access denied' });
+    throw new AuthorizationError('Access denied');
   }
   next();
 }
@@ -63,17 +66,15 @@ function ownerOrAdmin(req, res, next) {
  * Must be used after auth().
  * @param {string} requiredTier - 'pro' or 'premium'
  */
-function premiumOnly(requiredTier = 'pro') {
+export function premiumOnly(requiredTier = 'pro') {
   const tierLevels = { free: 0, pro: 1, premium: 2 };
   return (req, res, next) => {
     if (req.user?.isAdmin) return next();
     const userLevel = tierLevels[req.user?.membership_tier] ?? 0;
     const requiredLevel = tierLevels[requiredTier] ?? 1;
     if (userLevel < requiredLevel) {
-      return res.status(403).json({ error: `Requires ${requiredTier} membership or higher` });
+      throw new AuthorizationError(`Requires ${requiredTier} membership or higher`);
     }
     next();
   };
 }
-
-export { generateToken, auth, adminOnly, ownerOrAdmin, premiumOnly, JWT_SECRET };
